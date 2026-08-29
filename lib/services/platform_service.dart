@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 
 import '../app/app_constants.dart';
+import '../features/application_tracking/application_models.dart';
 
 enum PlatformEvent {
   locked,
@@ -13,6 +14,8 @@ enum PlatformEvent {
   trayToggle,
   trayAutostart,
   trayTopmost,
+  trayDashboard,
+  traySettings,
   trayQuit,
 }
 
@@ -33,10 +36,19 @@ class WindowPosition {
   final double y;
 }
 
+class WindowBounds {
+  const WindowBounds(this.x, this.y, this.width, this.height);
+  final double x;
+  final double y;
+  final double width;
+  final double height;
+}
+
 abstract interface class PlatformService {
   Stream<PlatformEvent> get events;
   Future<ActivitySnapshot> activitySnapshot();
   Future<String> bootId();
+  Future<ForegroundApplication?> foregroundApplication();
   Future<void> configureOverlay({
     required bool alwaysOnTop,
     double? x,
@@ -47,6 +59,8 @@ abstract interface class PlatformService {
   Future<void> show();
   Future<void> hide();
   Future<void> setAlwaysOnTop(bool value);
+  Future<void> configureDashboard({double? x, double? y});
+  Future<WindowBounds?> dashboardBounds();
   Future<bool> isAutostartEnabled();
   Future<void> setAutostartEnabled(bool value);
   Future<void> updateTray({
@@ -97,6 +111,25 @@ class WindowsPlatformService implements PlatformService {
       await _channel.invokeMethod<String>('bootId') ?? 'unknown-boot';
 
   @override
+  Future<ForegroundApplication?> foregroundApplication() async {
+    final value = await _channel.invokeMapMethod<String, Object?>(
+      'foregroundApplication',
+    );
+    if (value == null) return null;
+    return ForegroundApplication(
+      processId: (value['processId'] as num).toInt(),
+      executablePath: value['executablePath'] as String? ?? '',
+      executableName: value['executableName'] as String? ?? 'Unknown',
+      displayName:
+          value['displayName'] as String? ??
+          value['executableName'] as String? ??
+          'Unknown application',
+      windowTitle: value['windowTitle'] as String? ?? '',
+      observedAt: DateTime.now(),
+    );
+  }
+
+  @override
   Future<void> configureOverlay({
     required bool alwaysOnTop,
     double? x,
@@ -127,6 +160,23 @@ class WindowsPlatformService implements PlatformService {
   @override
   Future<void> setAlwaysOnTop(bool value) =>
       _channel.invokeMethod<void>('setAlwaysOnTop', value);
+  @override
+  Future<void> configureDashboard({double? x, double? y}) =>
+      _channel.invokeMethod<void>('configureDashboard', {'x': x, 'y': y});
+  @override
+  Future<WindowBounds?> dashboardBounds() async {
+    final value = await _channel.invokeMapMethod<String, Object?>(
+      'dashboardBounds',
+    );
+    if (value == null) return null;
+    return WindowBounds(
+      (value['x'] as num).toDouble(),
+      (value['y'] as num).toDouble(),
+      (value['width'] as num).toDouble(),
+      (value['height'] as num).toDouble(),
+    );
+  }
+
   @override
   Future<bool> isAutostartEnabled() async =>
       await _channel.invokeMethod<bool>('isAutostartEnabled') ?? false;

@@ -11,10 +11,12 @@
 
 #include <chrono>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "resource.h"
 #include "utils.h"
@@ -23,6 +25,7 @@ namespace {
 
 constexpr wchar_t kNotificationClass[] = L"LAPSE_NOTIFICATION_WINDOW";
 constexpr wchar_t kOverlayTitle[] = L"Lapse";
+constexpr wchar_t kDashboardTitle[] = L"Lapse Dashboard";
 constexpr wchar_t kAutostartKey[] =
     L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 constexpr wchar_t kAutostartValue[] = L"Lapse";
@@ -32,10 +35,13 @@ constexpr UINT kMenuToggle = 1002;
 constexpr UINT kMenuAutostart = 1003;
 constexpr UINT kMenuTopmost = 1004;
 constexpr UINT kMenuQuit = 1005;
+constexpr UINT kMenuDashboard = 1006;
+constexpr UINT kMenuSettings = 1007;
 
 std::shared_ptr<flutter::MethodChannel<flutter::EncodableValue>> g_channel;
 HWND g_notification_window = nullptr;
 HWND g_overlay_window = nullptr;
+HWND g_dashboard_window = nullptr;
 NOTIFYICONDATA g_tray_icon{};
 bool g_locked = false;
 bool g_sleeping = false;
@@ -73,6 +79,66 @@ HWND FindOverlayWindow() {
   EnumWindows(FindOverlayCallback, reinterpret_cast<LPARAM>(&result));
   g_overlay_window = result;
   return result;
+}
+
+BOOL CALLBACK FindDashboardCallback(HWND window, LPARAM data) {
+  DWORD process_id = 0;
+  GetWindowThreadProcessId(window, &process_id);
+  if (process_id != GetCurrentProcessId()) return TRUE;
+  wchar_t title[128]{};
+  GetWindowText(window, title, static_cast<int>(std::size(title)));
+  if (wcscmp(title, kDashboardTitle) == 0) {
+    *reinterpret_cast<HWND*>(data) = window;
+    return FALSE;
+  }
+  return TRUE;
+}
+
+HWND FindDashboardWindow() {
+  if (g_dashboard_window && IsWindow(g_dashboard_window)) return g_dashboard_window;
+  HWND result = nullptr;
+  EnumWindows(FindDashboardCallback, reinterpret_cast<LPARAM>(&result));
+  g_dashboard_window = result;
+  return result;
+}
+
+std::wstring FileNameFromPath(const std::wstring& path) {
+  const size_t separator = path.find_last_of(L"\\/");
+  return separator == std::wstring::npos ? path : path.substr(separator + 1);
+}
+
+std::wstring ProductNameFromPath(const std::wstring& path) {
+  static std::map<std::wstring, std::wstring> cache;
+  const auto cached = cache.find(path);
+  if (cached != cache.end()) return cached->second;
+  const std::wstring fallback = FileNameFromPath(path);
+  DWORD ignored = 0;
+  const DWORD size = GetFileVersionInfoSize(path.c_str(), &ignored);
+  if (size == 0) return cache[path] = fallback;
+  std::vector<BYTE> data(size);
+  if (!GetFileVersionInfo(path.c_str(), 0, size, data.data())) {
+    return cache[path] = fallback;
+  }
+  struct Translation { WORD language; WORD code_page; };
+  Translation* translations = nullptr;
+  UINT translation_size = 0;
+  if (!VerQueryValue(data.data(), L"\\VarFileInfo\\Translation",
+                     reinterpret_cast<void**>(&translations), &translation_size) ||
+      translation_size < sizeof(Translation)) {
+    return cache[path] = fallback;
+  }
+  for (const wchar_t* field : {L"ProductName", L"FileDescription"}) {
+    wchar_t query[128]{};
+    swprintf_s(query, L"\\StringFileInfo\\%04x%04x\\%s",
+               translations[0].language, translations[0].code_page, field);
+    wchar_t* value = nullptr;
+    UINT value_size = 0;
+    if (VerQueryValue(data.data(), query, reinterpret_cast<void**>(&value),
+                      &value_size) && value && value_size > 1) {
+      return cache[path] = value;
+    }
+  }
+  return cache[path] = fallback;
 }
 
 bool IsVisiblePosition(int x, int y, int width, int height) {
@@ -182,6 +248,8 @@ void ShowTrayMenu() {
   GetCursorPos(&cursor);
   HMENU menu = CreatePopupMenu();
   AppendMenu(menu, MF_STRING, kMenuOpen, L"Open Lapse");
+  AppendMenu(menu, MF_STRING, kMenuDashboard, L"Open Dashboard");
+  AppendMenu(menu, MF_STRING, kMenuSettings, L"Settings");
   AppendMenu(menu, MF_STRING, kMenuToggle,
              g_collapsed ? L"Expand" : L"Collapse");
   AppendMenu(menu, MF_STRING | (g_autostart ? MF_CHECKED : 0), kMenuAutostart,
@@ -201,6 +269,12 @@ void ShowTrayMenu() {
       break;
     case kMenuToggle:
       SendEvent("trayToggle");
+      break;
+    case kMenuDashboard:
+      SendEvent("trayDashboard");
+      break;
+    case kMenuSettings:
+      SendEvent("traySettings");
       break;
     case kMenuAutostart:
       SendEvent("trayAutostart");
@@ -299,6 +373,53 @@ void RegisterLapseChannel(flutter::FlutterEngine* engine) {
               {flutter::EncodableValue("sleeping"),
                flutter::EncodableValue(g_sleeping)},
           }));
+        } else if (call.method_name() == "foregroundApplication") {
+          HWND foreground = GetForegroundWindow();
+          DWORD process_id = 0;
+          GetWindowThreadProcessId(foreground, &process_id);
+          if (!foreground || process_id == 0) {
+            result->Success();
+            return;
+          }
+          HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+                                       process_id);
+          if (!process) {
+            result->Success();
+            return;
+          }
+          std::wstring path(32768, L'\0');
+          DWORD path_size = static_cast<DWORD>(path.size());
+          if (!QueryFullProcessImageName(process, 0, path.data(), &path_size)) {
+            CloseHandle(process);
+            result->Success();
+            return;
+          }
+          CloseHandle(process);
+          path.resize(path_size);
+          const std::wstring executable_name = FileNameFromPath(path);
+          const std::wstring display_name = ProductNameFromPath(path);
+          const int title_length = GetWindowTextLength(foreground);
+          std::wstring window_title(
+              title_length > 0 ? static_cast<size_t>(title_length + 1) : 1,
+              L'\0');
+          if (title_length > 0) {
+            GetWindowText(foreground, window_title.data(), title_length + 1);
+            window_title.resize(title_length);
+          } else {
+            window_title.clear();
+          }
+          result->Success(flutter::EncodableValue(flutter::EncodableMap{
+              {flutter::EncodableValue("processId"),
+               flutter::EncodableValue(static_cast<int64_t>(process_id))},
+              {flutter::EncodableValue("executablePath"),
+               flutter::EncodableValue(Utf8FromUtf16(path.c_str()))},
+              {flutter::EncodableValue("executableName"),
+               flutter::EncodableValue(Utf8FromUtf16(executable_name.c_str()))},
+              {flutter::EncodableValue("displayName"),
+               flutter::EncodableValue(Utf8FromUtf16(display_name.c_str()))},
+              {flutter::EncodableValue("windowTitle"),
+               flutter::EncodableValue(Utf8FromUtf16(window_title.c_str()))},
+          }));
         } else if (call.method_name() == "bootId") {
           FILETIME file_time{};
           GetSystemTimeAsFileTime(&file_time);
@@ -368,6 +489,41 @@ void RegisterLapseChannel(flutter::FlutterEngine* engine) {
                          SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
           }
           result->Success();
+        } else if (call.method_name() == "configureDashboard") {
+          HWND dashboard = FindDashboardWindow();
+          if (dashboard) {
+            RECT current{};
+            GetWindowRect(dashboard, &current);
+            const int width = current.right - current.left;
+            const int height = current.bottom - current.top;
+            const auto x = Argument<double>(arguments, "x");
+            const auto y = Argument<double>(arguments, "y");
+            if (x && y && IsVisiblePosition(static_cast<int>(*x),
+                                             static_cast<int>(*y), width,
+                                             height)) {
+              SetWindowPos(dashboard, nullptr, static_cast<int>(*x),
+                           static_cast<int>(*y), width, height,
+                           SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+          }
+          result->Success();
+        } else if (call.method_name() == "dashboardBounds") {
+          HWND dashboard = FindDashboardWindow();
+          if (!dashboard) {
+            result->Success();
+            return;
+          }
+          RECT rect{};
+          RECT client_rect{};
+          GetWindowRect(dashboard, &rect);
+          GetClientRect(dashboard, &client_rect);
+          const double scale = GetDpiForWindow(dashboard) / 96.0;
+          result->Success(flutter::EncodableValue(flutter::EncodableMap{
+              {flutter::EncodableValue("x"), flutter::EncodableValue(static_cast<double>(rect.left))},
+              {flutter::EncodableValue("y"), flutter::EncodableValue(static_cast<double>(rect.top))},
+              {flutter::EncodableValue("width"), flutter::EncodableValue((client_rect.right - client_rect.left) / scale)},
+              {flutter::EncodableValue("height"), flutter::EncodableValue((client_rect.bottom - client_rect.top) / scale)},
+          }));
         } else if (call.method_name() == "isAutostartEnabled") {
           result->Success(flutter::EncodableValue(IsAutostartEnabled()));
         } else if (call.method_name() == "setAutostartEnabled") {

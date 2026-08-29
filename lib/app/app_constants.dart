@@ -7,5 +7,5 @@ abstract final class AppConstants {
   static const Duration activityPollInterval = Duration(seconds: 1);
   static const Duration persistenceCheckpoint = Duration(seconds: 30);
   static const Size expandedSize = Size(312, 356);
-  static const Size collapsedSize = Size(228, 52);
+  static const Size collapsedSize = Size(244, 52);
 }

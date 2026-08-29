@@ -8,14 +8,19 @@ import '../session/session_controller.dart';
 import '../session/session_models.dart';
 
 class OverlayWindow extends StatelessWidget {
-  const OverlayWindow({super.key, required this.controller});
+  const OverlayWindow({
+    super.key,
+    required this.controller,
+    required this.onOpenDashboard,
+  });
 
   final SessionController controller;
+  final VoidCallback onOpenDashboard;
 
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: controller,
+      animation: Listenable.merge([controller, controller.displayDuration]),
       builder: (context, _) {
         final state = controller.state;
         return ColoredBox(
@@ -29,6 +34,8 @@ class OverlayWindow extends StatelessWidget {
                 duration: const Duration(milliseconds: 170),
                 switchInCurve: Curves.easeOutCubic,
                 switchOutCurve: Curves.easeInCubic,
+                layoutBuilder: (currentChild, previousChildren) =>
+                    currentChild ?? const SizedBox.shrink(),
                 child: collapsed
                     ? _CollapsedOverlay(
                         key: const ValueKey('collapsed'),
@@ -39,6 +46,7 @@ class OverlayWindow extends StatelessWidget {
                         key: const ValueKey('expanded'),
                         controller: controller,
                         state: state,
+                        onOpenDashboard: onOpenDashboard,
                       ),
               );
             },
@@ -116,9 +124,19 @@ class _CollapsedOverlay extends StatelessWidget {
           ),
           const SizedBox(width: 6),
           _SmallIconButton(
+            key: const Key('pauseButtonCollapsed'),
+            icon: state.session.isPaused
+                ? Icons.play_arrow_rounded
+                : Icons.pause_rounded,
+            semanticLabel: state.session.isPaused
+                ? 'Resume tracking'
+                : 'Pause tracking',
+            onPressed: controller.toggleManualPause,
+          ),
+          _SmallIconButton(
             key: const Key('expandButton'),
-            icon: Icons.keyboard_arrow_up_rounded,
-            tooltip: 'Expand Lapse',
+            icon: Icons.expand_more_rounded,
+            semanticLabel: 'Expand Lapse',
             onPressed: controller.toggleOverlayMode,
           ),
           const SizedBox(width: 5),
@@ -133,9 +151,11 @@ class _ExpandedOverlay extends StatefulWidget {
     super.key,
     required this.controller,
     required this.state,
+    required this.onOpenDashboard,
   });
   final SessionController controller;
   final SessionViewState state;
+  final VoidCallback onOpenDashboard;
 
   @override
   State<_ExpandedOverlay> createState() => _ExpandedOverlayState();
@@ -148,7 +168,31 @@ class _ExpandedOverlayState extends State<_ExpandedOverlay> {
   bool _adding = false;
 
   @override
+  void initState() {
+    super.initState();
+    _textController.addListener(_onTextChanged);
+    _focusNode.addListener(_onFocusChanged);
+  }
+
+  void _onTextChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _onFocusChanged() {
+    if (_focusNode.hasFocus) return;
+    scheduleMicrotask(() {
+      if (!mounted || _focusNode.hasFocus) return;
+      if ((_adding && _textController.text.trim().isEmpty) ||
+          _editingId != null) {
+        _cancelEditing();
+      }
+    });
+  }
+
+  @override
   void dispose() {
+    _textController.removeListener(_onTextChanged);
+    _focusNode.removeListener(_onFocusChanged);
     _textController.dispose();
     _focusNode.dispose();
     super.dispose();
@@ -198,120 +242,139 @@ class _ExpandedOverlayState extends State<_ExpandedOverlay> {
     final state = widget.state;
     final total = state.session.tasks.length;
     final completed = state.completedTaskCount;
-    return _OverlaySurface(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 11, 14, 10),
-        child: Column(
-          children: [
-            _Header(controller: widget.controller, state: state),
-            const SizedBox(height: 18),
-            Text(
-              _formatDuration(state.displayDuration),
-              key: const Key('sessionTimer'),
-              style: const TextStyle(
-                color: LapseColors.text,
-                fontSize: 34,
-                height: 1,
-                fontWeight: FontWeight.w300,
-                letterSpacing: 0.8,
-                fontFeatures: [FontFeature.tabularFigures()],
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () {
+        if (!_focusNode.hasFocus) return;
+        if ((_adding && _textController.text.trim().isEmpty) ||
+            _editingId != null) {
+          _cancelEditing();
+        } else {
+          _focusNode.unfocus();
+        }
+      },
+      child: _OverlaySurface(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 11, 14, 10),
+          child: Column(
+            children: [
+              _Header(controller: widget.controller, state: state),
+              const SizedBox(height: 18),
+              Text(
+                _formatDuration(state.displayDuration),
+                key: const Key('sessionTimer'),
+                style: const TextStyle(
+                  color: LapseColors.text,
+                  fontSize: 34,
+                  height: 1,
+                  fontWeight: FontWeight.w300,
+                  letterSpacing: 0.8,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
               ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              _activitySubtitle(state.activityState),
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                const Text(
-                  'TODO',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1.1,
+              const SizedBox(height: 6),
+              Text(
+                _activitySubtitle(state.activityState),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  const Text(
+                    'TODO',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.1,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    '$completed / $total',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: TweenAnimationBuilder<double>(
+                  duration: const Duration(milliseconds: 180),
+                  tween: Tween(end: total == 0 ? 0 : completed / total),
+                  builder: (context, value, _) => LinearProgressIndicator(
+                    value: value,
+                    minHeight: 3,
+                    backgroundColor: LapseColors.surfaceRaised,
+                    color: LapseColors.accent,
                   ),
                 ),
-                const Spacer(),
-                Text(
-                  '$completed / $total',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(2),
-              child: TweenAnimationBuilder<double>(
-                duration: const Duration(milliseconds: 180),
-                tween: Tween(end: total == 0 ? 0 : completed / total),
-                builder: (context, value, _) => LinearProgressIndicator(
-                  value: value,
-                  minHeight: 3,
-                  backgroundColor: LapseColors.surfaceRaised,
-                  color: LapseColors.accent,
-                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Expanded(
-              child: state.session.tasks.isEmpty && !_adding
-                  ? Center(
-                      child: Text(
-                        'No tasks for this session',
-                        style: Theme.of(context).textTheme.bodySmall,
+              const SizedBox(height: 8),
+              Expanded(
+                child: state.session.tasks.isEmpty && !_adding
+                    ? Center(
+                        child: Text(
+                          'No tasks for this session',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      )
+                    : ListView.builder(
+                        padding: EdgeInsets.zero,
+                        itemCount:
+                            state.session.tasks.length + (_adding ? 1 : 0),
+                        itemBuilder: (context, index) {
+                          if (index == state.session.tasks.length) {
+                            return _buildEditor();
+                          }
+                          final task = state.session.tasks[index];
+                          if (_editingId == task.id) {
+                            return _buildEditor();
+                          }
+                          return _TaskRow(
+                            key: Key('task-${task.id}'),
+                            task: task,
+                            onToggle: () =>
+                                widget.controller.toggleTask(task.id),
+                            onEdit: () => _startEditing(task),
+                            onDelete: () =>
+                                widget.controller.deleteTask(task.id),
+                          );
+                        },
                       ),
-                    )
-                  : ListView.builder(
-                      padding: EdgeInsets.zero,
-                      itemCount: state.session.tasks.length + (_adding ? 1 : 0),
-                      itemBuilder: (context, index) {
-                        if (index == state.session.tasks.length) {
-                          return _buildEditor();
-                        }
-                        final task = state.session.tasks[index];
-                        if (_editingId == task.id) {
-                          return _buildEditor();
-                        }
-                        return _TaskRow(
-                          key: Key('task-${task.id}'),
-                          task: task,
-                          onToggle: () => widget.controller.toggleTask(task.id),
-                          onEdit: () => _startEditing(task),
-                          onDelete: () => widget.controller.deleteTask(task.id),
-                        );
-                      },
+              ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  TextButton.icon(
+                    key: const Key('addTaskButton'),
+                    onPressed: _adding || _editingId != null
+                        ? null
+                        : _startAdding,
+                    style: TextButton.styleFrom(
+                      foregroundColor: LapseColors.textMuted,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 3,
+                      ),
+                      minimumSize: const Size(0, 28),
                     ),
-            ),
-            const SizedBox(height: 4),
-            Row(
-              children: [
-                TextButton.icon(
-                  key: const Key('addTaskButton'),
-                  onPressed: _adding || _editingId != null
-                      ? null
-                      : _startAdding,
-                  style: TextButton.styleFrom(
-                    foregroundColor: LapseColors.textMuted,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 4,
-                      vertical: 3,
+                    icon: const Icon(Icons.add_rounded, size: 16),
+                    label: const Text(
+                      'Add task',
+                      style: TextStyle(fontSize: 11),
                     ),
-                    minimumSize: const Size(0, 28),
                   ),
-                  icon: const Icon(Icons.add_rounded, size: 16),
-                  label: const Text('Add task', style: TextStyle(fontSize: 11)),
-                ),
-                const Spacer(),
-                _SmallIconButton(
-                  icon: Icons.settings_outlined,
-                  tooltip: 'Preferences',
-                  onPressed: () => _showPreferences(context, widget.controller),
-                ),
-              ],
-            ),
-          ],
+                  const Spacer(),
+                  _SmallIconButton(
+                    key: const Key('launchButton'),
+                    icon: Icons.launch_rounded,
+                    tooltip: 'Open Lapse dashboard',
+                    onPressed: widget.onOpenDashboard,
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -344,7 +407,28 @@ class _ExpandedOverlayState extends State<_ExpandedOverlay> {
             }) => null,
             textInputAction: TextInputAction.done,
             onSubmitted: (_) => _submit(),
-            decoration: const InputDecoration(hintText: 'What needs doing?'),
+            onTapOutside: (_) {
+              if ((_adding && _textController.text.trim().isEmpty) ||
+                  _editingId != null) {
+                _cancelEditing();
+              } else {
+                _focusNode.unfocus();
+              }
+            },
+            decoration: InputDecoration(
+              hintText: _adding ? 'What needs doing?' : 'Update task title',
+              suffixIconConstraints: const BoxConstraints.tightFor(
+                width: 34,
+                height: 32,
+              ),
+              suffixIcon: IconButton(
+                key: Key(_adding ? 'addTaskConfirm' : 'editTaskConfirm'),
+                tooltip: _adding ? 'Add task' : 'Save task',
+                onPressed: _textController.text.trim().isEmpty ? null : _submit,
+                padding: EdgeInsets.zero,
+                icon: const Icon(Icons.check_rounded, size: 17),
+              ),
+            ),
           ),
         ),
       ),
@@ -373,6 +457,20 @@ class _Header extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           _StatusBadge(state: state.activityState),
+          const SizedBox(width: 3),
+          _SmallIconButton(
+            key: const Key('pauseButton'),
+            icon: state.session.isPaused
+                ? Icons.play_arrow_rounded
+                : Icons.pause_rounded,
+            tooltip: state.session.isPaused
+                ? 'Resume tracking'
+                : 'Pause tracking',
+            semanticLabel: state.session.isPaused
+                ? 'Resume tracking'
+                : 'Pause tracking',
+            onPressed: controller.toggleManualPause,
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: _DragRegion(
@@ -567,63 +665,27 @@ class _SmallIconButton extends StatelessWidget {
   const _SmallIconButton({
     super.key,
     required this.icon,
-    required this.tooltip,
+    this.tooltip,
+    this.semanticLabel,
     required this.onPressed,
   });
   final IconData icon;
-  final String tooltip;
+  final String? tooltip;
+  final String? semanticLabel;
   final FutureOr<void> Function() onPressed;
 
   @override
-  Widget build(BuildContext context) => IconButton(
-    onPressed: onPressed,
-    tooltip: tooltip,
-    icon: Icon(icon, size: 16),
-    color: LapseColors.textMuted,
-    hoverColor: Colors.white.withValues(alpha: 0.06),
-    constraints: const BoxConstraints.tightFor(width: 28, height: 28),
-    padding: EdgeInsets.zero,
-  );
-}
-
-Future<void> _showPreferences(
-  BuildContext context,
-  SessionController controller,
-) {
-  return showDialog<void>(
-    context: context,
-    builder: (context) => AlertDialog(
-      backgroundColor: LapseColors.surfaceRaised,
-      insetPadding: const EdgeInsets.all(16),
-      titlePadding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
-      contentPadding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-      title: const Text('Preferences', style: TextStyle(fontSize: 15)),
-      content: AnimatedBuilder(
-        animation: controller,
-        builder: (context, _) => Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SwitchListTile(
-              dense: true,
-              title: const Text(
-                'Start with Windows',
-                style: TextStyle(fontSize: 12),
-              ),
-              value: controller.state.preferences.autostart,
-              onChanged: controller.setAutostart,
-            ),
-            SwitchListTile(
-              dense: true,
-              title: const Text(
-                'Always on top',
-                style: TextStyle(fontSize: 12),
-              ),
-              value: controller.state.preferences.alwaysOnTop,
-              onChanged: controller.setAlwaysOnTop,
-            ),
-          ],
-        ),
-      ),
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    label: semanticLabel ?? tooltip,
+    child: IconButton(
+      onPressed: onPressed,
+      tooltip: tooltip,
+      icon: Icon(icon, size: 16),
+      color: LapseColors.textMuted,
+      hoverColor: Colors.white.withValues(alpha: 0.06),
+      constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+      padding: EdgeInsets.zero,
     ),
   );
 }
@@ -637,6 +699,7 @@ String _formatDuration(Duration duration) {
 
 String _activitySubtitle(UserActivityState state) => switch (state) {
   UserActivityState.active => 'Active session',
+  UserActivityState.paused => 'Tracking paused',
   UserActivityState.idle => 'Paused while idle',
   UserActivityState.locked => 'Paused while Windows is locked',
   UserActivityState.sleeping => 'Paused while the PC sleeps',
@@ -644,6 +707,7 @@ String _activitySubtitle(UserActivityState state) => switch (state) {
 
 Color _statusColor(UserActivityState state) => switch (state) {
   UserActivityState.active => LapseColors.active,
+  UserActivityState.paused => LapseColors.accent,
   UserActivityState.idle => LapseColors.idle,
   UserActivityState.locked || UserActivityState.sleeping => LapseColors.locked,
 };

@@ -54,6 +54,8 @@ void main() {
       expect(controller.state.session.tasks, isEmpty);
       expect(controller.state.displayDuration, Duration.zero);
       expect(controller.state.preferences.overlayMode, OverlayMode.collapsed);
+      expect(controller.state.sessionHistory, hasLength(1));
+      expect(controller.state.sessionHistory.single.id, 'session-1');
     },
   );
 
@@ -80,5 +82,36 @@ void main() {
 
     controller.deleteTask(task.id);
     expect(controller.state.session.tasks, isEmpty);
+  });
+
+  test('manual pause stops and resumes active accumulation', () async {
+    final clock = FakeClock();
+    final detector = FakeActivityDetector();
+    final persistence = MemoryPersistence();
+    final controller = SessionController(
+      activityDetector: detector,
+      persistence: persistence,
+      platform: FakePlatform(),
+      clock: clock,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+
+    clock.advance(const Duration(minutes: 2));
+    controller.toggleManualPause();
+    expect(controller.state.activityState, UserActivityState.paused);
+    expect(controller.state.session.isPaused, isTrue);
+    await controller.persist();
+    expect(persistence.value?.session.isPaused, isTrue);
+
+    clock.advance(const Duration(minutes: 5));
+    expect(controller.state.displayDuration, const Duration(minutes: 2));
+
+    controller.toggleManualPause();
+    clock.advance(const Duration(minutes: 1));
+    await controller.persist();
+    expect(controller.state.activityState, UserActivityState.active);
+    expect(controller.state.displayDuration, const Duration(minutes: 3));
+    expect(persistence.value?.session.isPaused, isFalse);
   });
 }

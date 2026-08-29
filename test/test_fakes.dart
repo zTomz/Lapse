@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:lapse/features/session/active_time_accumulator.dart';
+import 'package:lapse/features/application_tracking/application_models.dart';
 import 'package:lapse/features/session/session_models.dart';
 import 'package:lapse/services/activity_detector.dart';
 import 'package:lapse/services/persistence_service.dart';
@@ -70,6 +71,9 @@ class FakePlatform implements PlatformService {
   Future<String> bootId() async => currentBootId;
 
   @override
+  Future<ForegroundApplication?> foregroundApplication() async => null;
+
+  @override
   Stream<PlatformEvent> get events => eventController.stream;
 
   @override
@@ -83,6 +87,13 @@ class FakePlatform implements PlatformService {
   }) async {
     topmost = alwaysOnTop;
   }
+
+  @override
+  Future<void> configureDashboard({double? x, double? y}) async {}
+
+  @override
+  Future<WindowBounds?> dashboardBounds() async =>
+      const WindowBounds(20, 30, 1000, 680);
 
   @override
   Future<void> hide() async => hidden = true;

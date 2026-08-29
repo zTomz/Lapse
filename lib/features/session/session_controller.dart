@@ -7,9 +7,12 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../app/app_constants.dart';
 import '../../services/activity_detector.dart';
+import '../../services/foreground_app_tracker.dart';
 import '../../services/persistence_service.dart';
 import '../../services/platform_service.dart';
 import '../../services/windows_activity_detector.dart';
+import '../application_tracking/application_models.dart';
+import '../application_tracking/application_usage_accumulator.dart';
 import 'active_time_accumulator.dart';
 import 'session_models.dart';
 
@@ -19,10 +22,12 @@ part 'session_controller.g.dart';
 SessionController sessionController(Ref ref) {
   final platform = WindowsPlatformService();
   final detector = WindowsActivityDetector(platform);
+  final foregroundTracker = WindowsForegroundAppTracker(platform);
   final controller = SessionController(
     activityDetector: detector,
     persistence: JsonPersistenceService(),
     platform: platform,
+    foregroundAppTracker: foregroundTracker,
   );
   ref.onDispose(controller.dispose);
   unawaited(controller.initialize());
@@ -34,6 +39,7 @@ class SessionController extends ChangeNotifier {
     required this._activityDetector,
     required this._persistence,
     required this._platform,
+    this._foregroundAppTracker,
     MonotonicClock? clock,
     DateTime Function()? now,
   }) : _clock = clock ?? StopwatchClock(),
@@ -53,21 +59,36 @@ class SessionController extends ChangeNotifier {
   final ActivityDetector _activityDetector;
   final PersistenceService _persistence;
   final PlatformService _platform;
+  final ForegroundAppTracker? _foregroundAppTracker;
   final MonotonicClock _clock;
   final DateTime Function() _now;
   SessionViewState _state;
   ActiveTimeAccumulator? _accumulator;
+  ApplicationUsageAccumulator? _applicationAccumulator;
   StreamSubscription<UserActivityState>? _activitySubscription;
   StreamSubscription<PlatformEvent>? _platformSubscription;
+  StreamSubscription<ForegroundApplication?>? _foregroundSubscription;
   Timer? _displayTimer;
   Timer? _checkpointTimer;
   String _bootId = 'unknown-boot';
   void Function(Size size)? _windowResizer;
+  UserActivityState _detectedActivityState = UserActivityState.idle;
+  VoidCallback? _openDashboard;
+  VoidCallback? _openDashboardSettings;
+  final ValueNotifier<Duration> displayDuration = ValueNotifier(Duration.zero);
 
   SessionViewState get state => _state;
 
   void attachWindowResizer(void Function(Size size) resize) {
     _windowResizer = resize;
+  }
+
+  void attachDashboardNavigation({
+    required VoidCallback openDashboard,
+    required VoidCallback openSettings,
+  }) {
+    _openDashboard = openDashboard;
+    _openDashboardSettings = openSettings;
   }
 
   Future<void> initialize() async {
@@ -83,20 +104,43 @@ class SessionController extends ChangeNotifier {
               activeDuration: Duration.zero,
               tasks: const [],
             );
+      final history = <ComputerSession>[
+        ...?persisted?.sessionHistory,
+        if (!sameBoot && persisted != null)
+          persisted.session.copyWith(endedAt: _now(), isPaused: false),
+      ];
       final preferences = persisted?.preferences ?? const LapsePreferences();
       _accumulator = ActiveTimeAccumulator(
         persistedDuration: session.activeDuration,
         clock: _clock,
       );
+      _applicationAccumulator = ApplicationUsageAccumulator(
+        clock: _clock,
+        persisted: session.applicationUsage,
+      );
+      _applicationAccumulator!.observe(
+        await _foregroundAppTracker?.currentApplication(),
+      );
       final activity = await _safeCurrentActivity();
-      _accumulator!.transitionTo(activity);
+      _detectedActivityState = activity;
+      final effectiveActivity = session.isPaused
+          ? UserActivityState.paused
+          : activity;
+      _accumulator!.transitionTo(effectiveActivity);
+      _applicationAccumulator!.setActive(
+        effectiveActivity == UserActivityState.active,
+      );
       _state = SessionViewState(
         session: session,
         preferences: preferences,
-        activityState: activity,
+        activityState: effectiveActivity,
         displayDuration: _accumulator!.current,
         isReady: true,
+        sessionHistory: history.length > 90
+            ? history.sublist(history.length - 90)
+            : List.unmodifiable(history),
       );
+      displayDuration.value = _state.displayDuration;
       notifyListeners();
       developer.log(
         sameBoot
@@ -106,6 +150,9 @@ class SessionController extends ChangeNotifier {
       );
       _activitySubscription = _activityDetector.states.listen(_onActivityState);
       _platformSubscription = _platform.events.listen(_onPlatformEvent);
+      _foregroundSubscription = _foregroundAppTracker?.activeApplication.listen(
+        _onForegroundApplication,
+      );
       _displayTimer = Timer.periodic(
         const Duration(seconds: 1),
         (_) => _refreshDisplay(),
@@ -153,14 +200,40 @@ class SessionController extends ChangeNotifier {
   }
 
   void _onActivityState(UserActivityState next) {
+    _detectedActivityState = next;
+    if (_state.session.isPaused) return;
+    _applyActivityState(next);
+  }
+
+  void _applyActivityState(UserActivityState next) {
     if (next == _state.activityState) return;
     developer.log(
       '${_state.activityState.name} -> ${next.name}',
       name: 'Lapse',
     );
     _accumulator?.transitionTo(next);
+    _applicationAccumulator?.setActive(next == UserActivityState.active);
     _state = _state.copyWith(
       activityState: next,
+      displayDuration: _accumulator?.current,
+    );
+    notifyListeners();
+    unawaited(persist());
+  }
+
+  void toggleManualPause() {
+    final paused = !_state.session.isPaused;
+    final session = _state.session.copyWith(isPaused: paused);
+    final activity = paused ? UserActivityState.paused : _detectedActivityState;
+    developer.log(
+      '${_state.activityState.name} -> ${activity.name}',
+      name: 'Lapse',
+    );
+    _accumulator?.transitionTo(activity);
+    _applicationAccumulator?.setActive(activity == UserActivityState.active);
+    _state = _state.copyWith(
+      session: session,
+      activityState: activity,
       displayDuration: _accumulator?.current,
     );
     notifyListeners();
@@ -171,7 +244,19 @@ class SessionController extends ChangeNotifier {
     final accumulator = _accumulator;
     if (accumulator == null) return;
     _state = _state.copyWith(displayDuration: accumulator.current);
+    displayDuration.value = _state.displayDuration;
+  }
+
+  void _onForegroundApplication(ForegroundApplication? application) {
+    _applicationAccumulator?.observe(application);
+    _state = _state.copyWith(
+      session: _state.session.copyWith(
+        applicationUsage:
+            _applicationAccumulator?.snapshot() ?? const <ApplicationUsage>[],
+      ),
+    );
     notifyListeners();
+    unawaited(persist());
   }
 
   Future<void> _onPlatformEvent(PlatformEvent event) async {
@@ -185,6 +270,10 @@ class SessionController extends ChangeNotifier {
         await setAutostart(!_state.preferences.autostart);
       case PlatformEvent.trayTopmost:
         await setAlwaysOnTop(!_state.preferences.alwaysOnTop);
+      case PlatformEvent.trayDashboard:
+        _openDashboard?.call();
+      case PlatformEvent.traySettings:
+        _openDashboardSettings?.call();
       case PlatformEvent.trayQuit:
         await quit();
       case PlatformEvent.locked:
@@ -322,16 +411,39 @@ class SessionController extends ChangeNotifier {
     final accumulator = _accumulator;
     if (accumulator == null) return;
     final duration = accumulator.checkpoint();
-    final session = _state.session.copyWith(activeDuration: duration);
+    final session = _state.session.copyWith(
+      activeDuration: duration,
+      applicationUsage: _applicationAccumulator?.checkpoint(),
+    );
     _state = _state.copyWith(session: session, displayDuration: duration);
     await _persistence.save(
       PersistedAppState(
         bootId: _bootId,
         session: session,
         preferences: _state.preferences,
+        sessionHistory: _state.sessionHistory,
       ),
     );
   }
+
+  Future<void> saveDashboardBounds() async {
+    final bounds = await _platform.dashboardBounds();
+    if (bounds == null) return;
+    _state = _state.copyWith(
+      preferences: _state.preferences.copyWith(
+        dashboardX: bounds.x,
+        dashboardY: bounds.y,
+        dashboardWidth: bounds.width,
+        dashboardHeight: bounds.height,
+      ),
+    );
+    await persist();
+  }
+
+  Future<void> configureDashboardWindow() => _platform.configureDashboard(
+    x: _state.preferences.dashboardX,
+    y: _state.preferences.dashboardY,
+  );
 
   Future<void> quit() async {
     await persist();
@@ -344,7 +456,10 @@ class SessionController extends ChangeNotifier {
     _checkpointTimer?.cancel();
     unawaited(_activitySubscription?.cancel());
     unawaited(_platformSubscription?.cancel());
+    unawaited(_foregroundSubscription?.cancel());
     _activityDetector.dispose();
+    _foregroundAppTracker?.dispose();
+    displayDuration.dispose();
     super.dispose();
   }
 }

@@ -29,6 +29,15 @@ void main() {
         ],
       ),
       preferences: const LapsePreferences(windowX: 123, windowY: 45),
+      sessionHistory: [
+        ComputerSession(
+          id: 'old',
+          startedAt: DateTime(2026, 8, 28),
+          endedAt: DateTime(2026, 8, 28, 12),
+          activeDuration: const Duration(hours: 2),
+          tasks: const [],
+        ),
+      ],
     );
 
     await persistence.save(expected);
@@ -38,6 +47,16 @@ void main() {
     expect(restored?.session.activeDuration, const Duration(seconds: 95));
     expect(restored?.session.tasks.single.isCompleted, isTrue);
     expect(restored?.preferences.windowX, 123);
+    expect(restored?.sessionHistory.single.id, 'old');
+  });
+
+  test('migrates schema 1 state with empty analytics defaults', () {
+    final restored = PersistedAppState.decode('''
+{"schemaVersion":1,"bootId":"boot-old","session":{"id":"s","startedAt":"2026-08-29T08:00:00.000Z","activeMilliseconds":10,"tasks":[]},"preferences":{}}
+''');
+    expect(restored.sessionHistory, isEmpty);
+    expect(restored.session.applicationUsage, isEmpty);
+    expect(restored.preferences.dashboardWidth, 1000);
   });
 
   test('returns null for missing and corrupted data', () async {
