@@ -123,28 +123,6 @@ The overlay and dynamically registered Dashboard have separate `WindowController
   The two narrow analyzer suppressions around the internal import are intentional until Flutter publishes the API. They are not global analyzer exclusions.
 </details>
 
-## Development
-
-```powershell
-dart format .
-dart run build_runner build
-flutter analyze
-flutter test
-flutter build windows
-```
-
-Generated `*.g.dart` files should never be edited manually. Regenerate them after changing Riverpod annotations.
-
-### Create a release bundle
-
-Update `version` in `pubspec.yaml`, then create a portable Windows x64 ZIP:
-
-```powershell
-.\tool\package_windows.ps1
-```
-
-The archive and its SHA-256 checksum are written to `dist\`. Users can extract the ZIP and run `lapse.exe`; all bundled files must remain together.
-
 ## Known limitations
 
 - The experimental Windowing API can change between Flutter `main` revisions.
