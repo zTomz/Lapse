@@ -60,6 +60,7 @@ abstract interface class PlatformService {
   Future<void> hide();
   Future<void> setAlwaysOnTop(bool value);
   Future<void> configureDashboard({double? x, double? y});
+  Future<void> beginDashboardDrag();
   Future<WindowBounds?> dashboardBounds();
   Future<bool> isAutostartEnabled();
   Future<void> setAutostartEnabled(bool value);
@@ -163,6 +164,9 @@ class WindowsPlatformService implements PlatformService {
   @override
   Future<void> configureDashboard({double? x, double? y}) =>
       _channel.invokeMethod<void>('configureDashboard', {'x': x, 'y': y});
+  @override
+  Future<void> beginDashboardDrag() =>
+      _channel.invokeMethod<void>('beginDashboardDrag');
   @override
   Future<WindowBounds?> dashboardBounds() async {
     final value = await _channel.invokeMapMethod<String, Object?>(

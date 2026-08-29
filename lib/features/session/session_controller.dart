@@ -109,7 +109,8 @@ class SessionController extends ChangeNotifier {
         if (!sameBoot && persisted != null)
           persisted.session.copyWith(endedAt: _now(), isPaused: false),
       ];
-      final preferences = persisted?.preferences ?? const LapsePreferences();
+      final preferences = (persisted?.preferences ?? const LapsePreferences())
+          .copyWith(overlayMode: OverlayMode.collapsed);
       _accumulator = ActiveTimeAccumulator(
         persistedDuration: session.activeDuration,
         clock: _clock,
@@ -444,6 +445,8 @@ class SessionController extends ChangeNotifier {
     x: _state.preferences.dashboardX,
     y: _state.preferences.dashboardY,
   );
+
+  Future<void> beginDashboardDrag() => _platform.beginDashboardDrag();
 
   Future<void> quit() async {
     await persist();

@@ -37,7 +37,7 @@ class _LapseWindowHostState extends ConsumerState<LapseWindowHost> {
   void initState() {
     super.initState();
     _overlayWindowController = WindowController(
-      size: AppConstants.expandedSize,
+      size: AppConstants.collapsedSize,
       constraints: const BoxConstraints(
         minWidth: 244,
         minHeight: 52,
@@ -64,6 +64,7 @@ class _LapseWindowHostState extends ConsumerState<LapseWindowHost> {
           return MaterialApp(
             title: AppConstants.name,
             debugShowCheckedModeBanner: false,
+            color: Colors.transparent,
             theme: buildLapseTheme(),
             home: OverlayWindow(
               controller: controller,
@@ -112,10 +113,18 @@ class _LapseWindowHostState extends ConsumerState<LapseWindowHost> {
         builder: (context, ref, _) => MaterialApp(
           title: '${AppConstants.name} Dashboard',
           debugShowCheckedModeBanner: false,
+          color: Colors.transparent,
           theme: buildLapseTheme(),
           home: DashboardWindow(
             controller: ref.watch(sessionControllerProvider),
             page: _dashboardPage,
+            windowState: windowController,
+            isMaximized: () => windowController.isMaximized,
+            onBeginDrag: sessionController.beginDashboardDrag,
+            onMinimize: () => windowController.setMinimized(true),
+            onToggleMaximize: () =>
+                windowController.setMaximized(!windowController.isMaximized),
+            onClose: () => unawaited(closeDashboard()),
           ),
         ),
       ),

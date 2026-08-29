@@ -15,33 +15,193 @@ class DashboardWindow extends StatelessWidget {
     super.key,
     required this.controller,
     required this.page,
+    this.windowState,
+    this.isMaximized,
+    this.onBeginDrag,
+    this.onMinimize,
+    this.onToggleMaximize,
+    this.onClose,
   });
 
   final SessionController controller;
   final ValueNotifier<DashboardPage> page;
+  final Listenable? windowState;
+  final bool Function()? isMaximized;
+  final VoidCallback? onBeginDrag;
+  final VoidCallback? onMinimize;
+  final VoidCallback? onToggleMaximize;
+  final VoidCallback? onClose;
 
   @override
   Widget build(BuildContext context) {
+    Widget titleBar() => _DashboardTitleBar(
+      isMaximized: isMaximized?.call() ?? false,
+      onBeginDrag: onBeginDrag,
+      onMinimize: onMinimize,
+      onToggleMaximize: onToggleMaximize,
+      onClose: onClose,
+    );
+    final chrome = windowState == null
+        ? titleBar()
+        : AnimatedBuilder(
+            animation: windowState!,
+            builder: (_, _) => titleBar(),
+          );
     return Material(
-      color: LapseColors.background,
-      child: Row(
-        children: [
-          SizedBox(width: 184, child: _Sidebar(page: page)),
-          const VerticalDivider(width: 1, color: LapseColors.border),
-          Expanded(
-            child: ValueListenableBuilder<DashboardPage>(
-              valueListenable: page,
-              builder: (context, selected, _) => AnimatedBuilder(
-                animation: controller,
-                builder: (context, _) =>
-                    _DashboardContent(page: selected, controller: controller),
+      color: Colors.transparent,
+      child: ColoredBox(
+        color: LapseColors.background.withValues(alpha: 0.68),
+        child: Column(
+          children: [
+            chrome,
+            const Divider(height: 1, color: LapseColors.border),
+            Expanded(
+              child: Row(
+                children: [
+                  SizedBox(width: 184, child: _Sidebar(page: page)),
+                  const VerticalDivider(width: 1, color: LapseColors.border),
+                  Expanded(
+                    child: ValueListenableBuilder<DashboardPage>(
+                      valueListenable: page,
+                      builder: (context, selected, _) => AnimatedBuilder(
+                        animation: controller,
+                        builder: (context, _) => _DashboardContent(
+                          page: selected,
+                          controller: controller,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
+}
+
+class _DashboardTitleBar extends StatelessWidget {
+  const _DashboardTitleBar({
+    required this.isMaximized,
+    this.onBeginDrag,
+    this.onMinimize,
+    this.onToggleMaximize,
+    this.onClose,
+  });
+
+  final bool isMaximized;
+  final VoidCallback? onBeginDrag;
+  final VoidCallback? onMinimize;
+  final VoidCallback? onToggleMaximize;
+  final VoidCallback? onClose;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    height: 42,
+    child: Row(
+      children: [
+        Expanded(
+          child: GestureDetector(
+            key: const Key('dashboardDragRegion'),
+            behavior: HitTestBehavior.opaque,
+            onPanStart: (_) => onBeginDrag?.call(),
+            onDoubleTap: onToggleMaximize,
+            child: const Padding(
+              padding: EdgeInsets.only(left: 14),
+              child: Row(
+                children: [
+                  Image(
+                    image: AssetImage('assets/images/app_icon.png'),
+                    width: 24,
+                    height: 24,
+                    filterQuality: FilterQuality.high,
+                  ),
+                  SizedBox(width: 9),
+                  Text(
+                    'Lapse',
+                    style: TextStyle(
+                      color: LapseColors.text,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        _WindowButton(
+          key: const Key('minimizeWindowButton'),
+          icon: Icons.remove_rounded,
+          tooltip: 'Minimize',
+          onPressed: onMinimize,
+        ),
+        _WindowButton(
+          key: const Key('maximizeWindowButton'),
+          icon: isMaximized
+              ? Icons.filter_none_rounded
+              : Icons.crop_square_rounded,
+          tooltip: isMaximized ? 'Restore' : 'Maximize',
+          onPressed: onToggleMaximize,
+        ),
+        _WindowButton(
+          key: const Key('closeWindowButton'),
+          icon: Icons.close_rounded,
+          tooltip: 'Close',
+          danger: true,
+          onPressed: onClose,
+        ),
+      ],
+    ),
+  );
+}
+
+class _WindowButton extends StatefulWidget {
+  const _WindowButton({
+    super.key,
+    required this.icon,
+    required this.tooltip,
+    this.danger = false,
+    this.onPressed,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final bool danger;
+  final VoidCallback? onPressed;
+
+  @override
+  State<_WindowButton> createState() => _WindowButtonState();
+}
+
+class _WindowButtonState extends State<_WindowButton> {
+  var _hovered = false;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    onEnter: (_) => setState(() => _hovered = true),
+    onExit: (_) => setState(() => _hovered = false),
+    child: Tooltip(
+      message: widget.tooltip,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onPressed,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 90),
+          width: 46,
+          height: 42,
+          color: !_hovered
+              ? Colors.transparent
+              : widget.danger
+              ? const Color(0xFFC42B1C)
+              : Colors.white.withValues(alpha: 0.08),
+          child: Icon(widget.icon, size: 15, color: Colors.white),
+        ),
+      ),
+    ),
+  );
 }
 
 class _Sidebar extends StatelessWidget {
@@ -51,40 +211,25 @@ class _Sidebar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
-      color: LapseColors.surface,
+      color: LapseColors.surface.withValues(alpha: 0.56),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 20, 12, 16),
+        padding: const EdgeInsets.fromLTRB(12, 18, 12, 16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 8),
-              child: Row(
-                children: [
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: LapseColors.accent,
-                      borderRadius: BorderRadius.all(Radius.circular(7)),
-                    ),
-                    child: SizedBox(
-                      width: 28,
-                      height: 28,
-                      child: Icon(
-                        Icons.timelapse_rounded,
-                        size: 17,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                  SizedBox(width: 10),
-                  Text(
-                    'Lapse',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
-                ],
+              padding: EdgeInsets.symmetric(horizontal: 10),
+              child: Text(
+                'WORKSPACE',
+                style: TextStyle(
+                  color: LapseColors.textMuted,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 1,
+                ),
               ),
             ),
-            const SizedBox(height: 28),
+            const SizedBox(height: 12),
             for (final item in const [
               (
                 DashboardPage.dashboard,
@@ -348,7 +493,7 @@ class _Panel extends StatelessWidget {
   final Widget child;
   @override
   Widget build(BuildContext context) => Material(
-    color: LapseColors.surface.withValues(alpha: 0.72),
+    color: LapseColors.surface.withValues(alpha: 0.62),
     shape: RoundedRectangleBorder(
       side: BorderSide(color: LapseColors.border.withValues(alpha: 0.8)),
       borderRadius: BorderRadius.circular(10),

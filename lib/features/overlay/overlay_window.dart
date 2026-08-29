@@ -24,7 +24,7 @@ class OverlayWindow extends StatelessWidget {
       builder: (context, _) {
         final state = controller.state;
         return ColoredBox(
-          color: LapseColors.background,
+          color: Colors.transparent,
           child: LayoutBuilder(
             builder: (context, constraints) {
               final collapsed =
@@ -67,8 +67,8 @@ class _OverlaySurface extends StatelessWidget {
       color: Colors.transparent,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: LapseColors.surface,
-          border: Border.all(color: LapseColors.border.withValues(alpha: 0.9)),
+          color: LapseColors.surface.withValues(alpha: 0.76),
+          border: Border.all(color: LapseColors.border.withValues(alpha: 0.74)),
           borderRadius: BorderRadius.circular(12),
         ),
         child: child,

@@ -92,6 +92,9 @@ class FakePlatform implements PlatformService {
   Future<void> configureDashboard({double? x, double? y}) async {}
 
   @override
+  Future<void> beginDashboardDrag() async {}
+
+  @override
   Future<WindowBounds?> dashboardBounds() async =>
       const WindowBounds(20, 30, 1000, 680);
 

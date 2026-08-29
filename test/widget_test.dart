@@ -23,6 +23,7 @@ void main() {
       clock: FakeClock(),
     );
     await controller.initialize();
+    await controller.toggleOverlayMode();
     return controller;
   }
 
@@ -52,6 +53,7 @@ void main() {
       clock: FakeClock(),
     );
     await controller.initialize();
+    await controller.toggleOverlayMode();
     var dashboardRequested = false;
 
     await tester.pumpWidget(

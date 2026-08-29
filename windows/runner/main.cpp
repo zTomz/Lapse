@@ -42,6 +42,7 @@ std::shared_ptr<flutter::MethodChannel<flutter::EncodableValue>> g_channel;
 HWND g_notification_window = nullptr;
 HWND g_overlay_window = nullptr;
 HWND g_dashboard_window = nullptr;
+WNDPROC g_dashboard_original_proc = nullptr;
 NOTIFYICONDATA g_tray_icon{};
 bool g_locked = false;
 bool g_sleeping = false;
@@ -102,6 +103,57 @@ HWND FindDashboardWindow() {
   return result;
 }
 
+LRESULT CALLBACK DashboardWindowProc(HWND window, UINT message, WPARAM wparam,
+                                     LPARAM lparam) {
+  const WNDPROC original_proc = g_dashboard_original_proc;
+  if (!original_proc) return DefWindowProc(window, message, wparam, lparam);
+
+  if (message == WM_NCCALCSIZE && wparam == TRUE) {
+    if (IsZoomed(window)) {
+      auto* parameters = reinterpret_cast<NCCALCSIZE_PARAMS*>(lparam);
+      MONITORINFO monitor_info{sizeof(MONITORINFO)};
+      if (GetMonitorInfo(
+              MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
+              &monitor_info)) {
+        parameters->rgrc[0] = monitor_info.rcWork;
+      }
+    }
+    return 0;
+  }
+
+  if (message == WM_NCHITTEST && !IsZoomed(window)) {
+    RECT bounds{};
+    GetWindowRect(window, &bounds);
+    const UINT dpi = GetDpiForWindow(window);
+    const int border_x = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) +
+                         GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+    const int border_y = GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) +
+                         GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+    const int pointer_x = static_cast<short>(LOWORD(lparam));
+    const int pointer_y = static_cast<short>(HIWORD(lparam));
+    const bool left = pointer_x < bounds.left + border_x;
+    const bool right = pointer_x >= bounds.right - border_x;
+    const bool top = pointer_y < bounds.top + border_y;
+    const bool bottom = pointer_y >= bounds.bottom - border_y;
+
+    if (top && left) return HTTOPLEFT;
+    if (top && right) return HTTOPRIGHT;
+    if (bottom && left) return HTBOTTOMLEFT;
+    if (bottom && right) return HTBOTTOMRIGHT;
+    if (left) return HTLEFT;
+    if (right) return HTRIGHT;
+    if (top) return HTTOP;
+    if (bottom) return HTBOTTOM;
+    return HTCLIENT;
+  }
+
+  if (message == WM_NCDESTROY) {
+    g_dashboard_window = nullptr;
+    g_dashboard_original_proc = nullptr;
+  }
+  return CallWindowProc(original_proc, window, message, wparam, lparam);
+}
+
 std::wstring FileNameFromPath(const std::wstring& path) {
   const size_t separator = path.find_last_of(L"\\/");
   return separator == std::wstring::npos ? path : path.substr(separator + 1);
@@ -146,12 +198,94 @@ bool IsVisiblePosition(int x, int y, int width, int height) {
   return MonitorFromRect(&rectangle, MONITOR_DEFAULTTONULL) != nullptr;
 }
 
+enum class WindowCompositionAttribute { accent_policy = 19 };
+enum class AccentState {
+  disabled = 0,
+  acrylic_blur_behind = 4,
+};
+struct AccentPolicy {
+  AccentState state;
+  DWORD flags;
+  DWORD gradient_color;
+  DWORD animation_id;
+};
+struct WindowCompositionAttributeData {
+  WindowCompositionAttribute attribute;
+  void* data;
+  SIZE_T size;
+};
+using SetWindowCompositionAttribute = BOOL(WINAPI*)(
+    HWND, WindowCompositionAttributeData*);
+
+bool SetAccentPolicy(HWND window, AccentState state, DWORD color = 0) {
+  const HMODULE user32 = GetModuleHandleW(L"user32.dll");
+  if (!user32) return false;
+  const auto set_window_composition_attribute =
+      reinterpret_cast<SetWindowCompositionAttribute>(
+          GetProcAddress(user32, "SetWindowCompositionAttribute"));
+  if (!set_window_composition_attribute) return false;
+  AccentPolicy accent{state, 2, color, 0};
+  WindowCompositionAttributeData data{
+      WindowCompositionAttribute::accent_policy, &accent, sizeof(accent)};
+  return set_window_composition_attribute(window, &data) == TRUE;
+}
+
+void ConfigureAcrylicBackdrop(HWND window) {
+  constexpr DWORD kDwmSystemBackdropType = 38;
+  constexpr DWORD kDwmWindowCornerPreference = 33;
+  constexpr DWORD kDwmCaptionColor = 35;
+  constexpr int kDesktopAcrylicBackdrop = 3;
+  constexpr DWORD kRoundCorners = 2;
+  constexpr BOOL kDarkMode = TRUE;
+  constexpr COLORREF kTransparentCaption = 0xFFFFFFFE;
+  // ABGR: 80% opaque #191D24, used only on Windows versions without the
+  // system backdrop API.
+  constexpr DWORD kLegacyAcrylicTint = 0xCC241D19;
+
+  SetAccentPolicy(window, AccentState::disabled);
+  DwmSetWindowAttribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE, &kDarkMode,
+                        sizeof(kDarkMode));
+  DwmSetWindowAttribute(window, kDwmCaptionColor, &kTransparentCaption,
+                        sizeof(kTransparentCaption));
+  const HRESULT backdrop_result =
+      DwmSetWindowAttribute(window, kDwmSystemBackdropType,
+                            &kDesktopAcrylicBackdrop,
+                            sizeof(kDesktopAcrylicBackdrop));
+  DwmSetWindowAttribute(window, kDwmWindowCornerPreference, &kRoundCorners,
+                        sizeof(kRoundCorners));
+  const MARGINS frame_margins{-1, -1, -1, -1};
+  DwmExtendFrameIntoClientArea(window, &frame_margins);
+  if (FAILED(backdrop_result)) {
+    SetAccentPolicy(window, AccentState::acrylic_blur_behind,
+                    kLegacyAcrylicTint);
+  }
+}
+
+void ConfigureDashboardChrome(HWND dashboard) {
+  ConfigureAcrylicBackdrop(dashboard);
+
+  LONG_PTR style = GetWindowLongPtr(dashboard, GWL_STYLE);
+  style &= ~WS_CAPTION;
+  style |= WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
+  SetWindowLongPtr(dashboard, GWL_STYLE, style);
+  if (!g_dashboard_original_proc) {
+    g_dashboard_original_proc = reinterpret_cast<WNDPROC>(SetWindowLongPtr(
+        dashboard, GWLP_WNDPROC,
+        reinterpret_cast<LONG_PTR>(DashboardWindowProc)));
+  }
+  SetWindowPos(dashboard, nullptr, 0, 0, 0, 0,
+               SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                   SWP_NOACTIVATE);
+}
+
 void ConfigureOverlay(bool always_on_top, std::optional<int> x,
                       std::optional<int> y) {
   HWND overlay = FindOverlayWindow();
   if (!overlay) {
     return;
   }
+
+  ConfigureAcrylicBackdrop(overlay);
 
   LONG_PTR style = GetWindowLongPtr(overlay, GWL_STYLE);
   style &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX |
@@ -163,10 +297,6 @@ void ConfigureOverlay(bool always_on_top, std::optional<int> x,
   extended_style |= WS_EX_TOOLWINDOW;
   extended_style &= ~WS_EX_APPWINDOW;
   SetWindowLongPtr(overlay, GWL_EXSTYLE, extended_style);
-
-  constexpr DWORD corner_preference = 2;  // DWMWCP_ROUND
-  DwmSetWindowAttribute(overlay, 33, &corner_preference,
-                        sizeof(corner_preference));
 
   RECT current{};
   GetWindowRect(overlay, &current);
@@ -492,6 +622,7 @@ void RegisterLapseChannel(flutter::FlutterEngine* engine) {
         } else if (call.method_name() == "configureDashboard") {
           HWND dashboard = FindDashboardWindow();
           if (dashboard) {
+            ConfigureDashboardChrome(dashboard);
             RECT current{};
             GetWindowRect(dashboard, &current);
             const int width = current.right - current.left;
@@ -505,6 +636,13 @@ void RegisterLapseChannel(flutter::FlutterEngine* engine) {
                            static_cast<int>(*y), width, height,
                            SWP_NOZORDER | SWP_NOACTIVATE);
             }
+          }
+          result->Success();
+        } else if (call.method_name() == "beginDashboardDrag") {
+          HWND dashboard = FindDashboardWindow();
+          if (dashboard && !IsZoomed(dashboard)) {
+            ReleaseCapture();
+            SendMessage(dashboard, WM_NCLBUTTONDOWN, HTCAPTION, 0);
           }
           result->Success();
         } else if (call.method_name() == "dashboardBounds") {

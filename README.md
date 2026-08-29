@@ -80,6 +80,27 @@ flutter build windows
 
 Do not edit `*.g.dart` files manually. Regenerate them after changing Riverpod annotations.
 
+## GitHub release bundle
+
+Update `version` in `pubspec.yaml`, then create a portable Windows x64 ZIP:
+
+```powershell
+.\tool\package_windows.ps1
+```
+
+The script builds the release, includes the executable, Flutter and plugin DLLs,
+the `data` directory, and the required Visual C++ runtime DLLs. The resulting
+archive and its SHA-256 checksum are written to `dist\`.
+
+Upload the ZIP to a GitHub Release in the web interface, or use GitHub CLI:
+
+```powershell
+gh release create v1.0.0 .\dist\lapse-windows-x64-v1.0.0.zip .\dist\lapse-windows-x64-v1.0.0.zip.sha256 --title "Lapse v1.0.0" --generate-notes
+```
+
+Users can extract the ZIP and run `lapse.exe`; the files inside the archive must
+remain together.
+
 ## Known limitations
 
 - The Windowing API can break between Flutter `main` revisions.

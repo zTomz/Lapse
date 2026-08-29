@@ -36,6 +36,25 @@ void main() {
     expect(controller.state.preferences.overlayMode, OverlayMode.collapsed);
   });
 
+  test('always starts with the overlay collapsed', () async {
+    final expandedState = PersistedAppState(
+      bootId: 'boot-a',
+      session: persistedState().session,
+      preferences: const LapsePreferences(overlayMode: OverlayMode.expanded),
+    );
+    final controller = SessionController(
+      activityDetector: FakeActivityDetector(),
+      persistence: MemoryPersistence(expandedState),
+      platform: FakePlatform(),
+      clock: FakeClock(),
+    );
+    addTearDown(controller.dispose);
+
+    await controller.initialize();
+
+    expect(controller.state.preferences.overlayMode, OverlayMode.collapsed);
+  });
+
   test(
     'starts a fresh task list on a new boot but keeps preferences',
     () async {

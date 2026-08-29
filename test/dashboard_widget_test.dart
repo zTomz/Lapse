@@ -50,6 +50,10 @@ void main() {
     );
     await controller.initialize();
     final page = ValueNotifier(DashboardPage.dashboard);
+    var dragRequested = false;
+    var minimizeRequested = false;
+    var maximizeRequested = false;
+    var closeRequested = false;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -57,10 +61,29 @@ void main() {
         home: SizedBox(
           width: 1000,
           height: 680,
-          child: DashboardWindow(controller: controller, page: page),
+          child: DashboardWindow(
+            controller: controller,
+            page: page,
+            onBeginDrag: () => dragRequested = true,
+            onMinimize: () => minimizeRequested = true,
+            onToggleMaximize: () => maximizeRequested = true,
+            onClose: () => closeRequested = true,
+          ),
         ),
       ),
     );
+    await tester.drag(
+      find.byKey(const Key('dashboardDragRegion')),
+      const Offset(20, 0),
+    );
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(dragRequested, isTrue);
+    await tester.tap(find.byKey(const Key('minimizeWindowButton')));
+    await tester.tap(find.byKey(const Key('maximizeWindowButton')));
+    await tester.tap(find.byKey(const Key('closeWindowButton')));
+    expect(minimizeRequested, isTrue);
+    expect(maximizeRequested, isTrue);
+    expect(closeRequested, isTrue);
     expect(find.text('Active time'), findsOneWidget);
     expect(find.byType(CustomPaint), findsWidgets);
 
