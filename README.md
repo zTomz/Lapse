@@ -1,72 +1,127 @@
-# Lapse
+<p align="center">
+  <img src="assets/images/app_icon.png" width="96" alt="Lapse app icon">
+</p>
 
-Lapse is a compact Windows companion that automatically measures active PC time and keeps a tiny, session-specific todo list visible. It starts tracking without a Start button, pauses for idle/locked/sleep states, and can collapse into a 244 × 52 timer strip.
+<h1 align="center">Lapse</h1>
 
-> Flutter's Desktop Windowing API is experimental and not production-stable. This project intentionally targets Flutter's `main` channel and can require updates after any SDK upgrade.
+<p align="center">
+  A quiet Windows companion for active-time tracking and session-focused tasks.
+</p>
 
-## Features
+<p align="center">
+  <img alt="Platform: Windows" src="https://img.shields.io/badge/platform-Windows-0078D4?logo=windows11&logoColor=white">
+  <img alt="Built with Flutter" src="https://img.shields.io/badge/built_with-Flutter-02569B?logo=flutter&logoColor=white">
+  <img alt="Local only" src="https://img.shields.io/badge/data-local_only-45C98A">
+  <img alt="Version 0.1.0" src="https://img.shields.io/badge/version-0.1.0-5B8FF9">
+</p>
 
-- Correct active-time accumulation from monotonic intervals rather than timer ticks
-- Windows-wide idle detection with a five-minute threshold
-- Lock/unlock and suspend/resume handling
-- Compact always-on-top, frameless overlay with saved multi-monitor-safe position
-- Expanded and collapsed window modes
-- Manual pause/resume with a persisted `PAUSED` session state
-- Session tasks: add, complete, edit, delete, keyboard submit/cancel, and progress
-- Atomic local JSON persistence in `%LOCALAPPDATA%\Lapse\state.json`
-- Same-boot session recovery and fresh tasks after a new boot
-- Current-user Windows autostart without administrator rights
-- Tray menu for opening, collapsing/expanding, autostart, topmost, and deliberate quit
-- Close-to-tray behavior so tracking continues in the background
-- A resizable native Dashboard with overview, 7-day chart, applications, sessions, and settings
-- Local-only Windows foreground-application usage during ACTIVE intervals
-- Versioned session history and backward-compatible schema migration
+<p align="center">
+  Lapse starts tracking automatically, pauses when Windows is idle, locked, or asleep,
+  and keeps a small task list close by without getting in your way.
+</p>
 
-## Screenshot
+![Lapse dashboard alongside the expanded session overlay](docs/screenshots/lapse_window_opened.png)
 
-_Screenshot placeholder — capture the overlay from a local Windows run._
+## Why I built Lapse
 
-## Requirements and setup
+I believe Lapse can be a genuinely useful tool because I noticed how helpful it is when a timer starts automatically with the PC. There is nothing to remember or set up at the beginning of a session—the elapsed time is simply there whenever I need it, making it much easier not to lose track of how long I have been at the computer.
 
-- Windows 10 or newer
-- Visual Studio with the Desktop development with C++ workload
-- Flutter `main` channel with experimental windowing enabled
+## Highlights
+
+- **Accurate active time** — uses monotonic intervals instead of assuming every timer tick arrived on time.
+- **Automatic activity awareness** — pauses after five minutes of inactivity and reacts to lock, unlock, sleep, and resume events.
+- **Session todo list** — add, complete, edit, and remove the few tasks that matter right now.
+- **Two overlay modes** — switch between the full task view and a compact `244 × 52` timer strip.
+- **Useful history** — review daily totals, a seven-day overview, recent sessions, and foreground-application usage.
+- **Native Windows behavior** — always-on-top support, multi-monitor-safe positioning, autostart, system tray controls, and close-to-tray.
+- **Private by design** — all data stays on the device; there are no accounts, cloud sync, or telemetry.
+
+## Designed to stay out of the way
+
+The expanded overlay combines the current session timer with a deliberately small task list. Collapse it when you only need a glance at the timer and progress.
+
+<table>
+  <tr>
+    <td width="50%" align="center"><strong>Focus view</strong></td>
+    <td width="50%" align="center"><strong>Compact view</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/lapse_expanded.png" alt="Expanded Lapse overlay with timer and tasks"></td>
+    <td><img src="docs/screenshots/lapse_minimized.png" alt="Compact Lapse timer overlay"></td>
+  </tr>
+  <tr>
+    <td align="center">Timer, session status, progress, and tasks</td>
+    <td align="center">Time and progress at a glance</td>
+  </tr>
+</table>
+
+## Build from source
+
+Lapse currently targets Windows 10 or newer and Flutter's experimental Desktop Windowing API.
+
+### Prerequisites
+
+- [Flutter](https://docs.flutter.dev/get-started/install/windows/desktop) on the `main` channel
+- Visual Studio with the **Desktop development with C++** workload
+- Windows desktop and experimental windowing support enabled
 
 ```powershell
 flutter channel main
 flutter upgrade
+flutter config --enable-windows-desktop
 flutter config --enable-windowing
 flutter pub get
 dart run build_runner build
 flutter run -d windows
 ```
 
-The installed SDK used for this version was Flutter `3.48.0-1.0.pre-515` / Dart `3.14.0-179.0.dev` from 29 August 2026.
+The current project was developed with Flutter `3.48.0-1.0.pre-515` and Dart `3.14.0-179.0.dev` from 29 August 2026.
 
-## Architecture
+> [!WARNING]
+> Flutter's Desktop Windowing API is experimental. Lapse intentionally follows Flutter's `main` channel, so SDK upgrades may require code changes.
 
-`runWidget()` mounts a Riverpod `ProviderScope` above Flutter's experimental `WindowManager`. The overlay and dynamically registered Dashboard each use their own `WindowController` while sharing one `SessionController`, interval accumulators, tasks, analytics, preferences, and persistence layer in the same widget tree.
+## Data and privacy
 
-The Dart services isolate platform and persistence concerns:
+Lapse stores its versioned state locally at:
 
-- `ActivityDetector` exposes activity states without leaking Win32 details.
-- `ForegroundAppTracker` polls the foreground process once per second and emits only changes.
-- `WindowsPlatformService` is the only Dart platform-channel boundary.
-- `JsonPersistenceService` owns versioned, fault-tolerant local state.
+```text
+%LOCALAPPDATA%\Lapse\state.json
+```
 
-The small Windows runner bridge exists because the experimental Flutter API does not currently expose window position, frameless/topmost/taskbar behavior, system tray, global last-input time, foreground-process metadata, session/power notifications, or per-user autostart. App/session/task and analytics logic remains in Dart.
+The file contains session time, tasks, application usage summaries, history, and preferences. Application usage is stored as an executable identity, a resolved display name, and cumulative active duration rather than a chronological activity log. Writes are atomic, state is checkpointed every 30 seconds, and same-boot sessions can be recovered after a restart.
 
-## Experimental Windowing API
+## How it is built
 
-The app uses these current SDK symbols:
+The app uses Flutter and Riverpod for its UI and shared session state, with a small native Windows runner bridge for capabilities that the experimental Flutter API does not expose yet.
 
-- `runWidget()` instead of `runApp()`
-- internal `package:flutter/src/widgets/_window.dart`
-- `WindowController`, `WindowControllerDelegate`, and `Window`
-- `WindowManager`, `WindowRegistry`, and `WindowEntry` for the Dashboard window
-- `WindowController.setSize()` for expanded/collapsed resizing
+```text
+Flutter UI
+├── Overlay window
+├── Dashboard window
+└── Riverpod session state
+    ├── Active-time and application-usage accumulators
+    ├── Versioned JSON persistence
+    └── Windows platform services
+        ├── Activity, lock, and power events
+        ├── Foreground application metadata
+        └── Tray, autostart, topmost, and window positioning
+```
 
-The two narrow analyzer suppressions around the internal import are required until Flutter publishes this API. They are not global analyzer exclusions.
+The overlay and dynamically registered Dashboard have separate `WindowController`s while sharing a single session controller and persistence layer.
+
+<details>
+  <summary><strong>Experimental Windowing API details</strong></summary>
+
+  Lapse currently uses:
+
+  - `runWidget()` instead of `runApp()`
+  - internal `package:flutter/src/widgets/_window.dart`
+  - `WindowController`, `WindowControllerDelegate`, and `Window`
+  - `WindowManager`, `WindowRegistry`, and `WindowEntry` for the Dashboard
+  - `WindowController.setSize()` for overlay resizing
+
+  The two narrow analyzer suppressions around the internal import are intentional until Flutter publishes the API. They are not global analyzer exclusions.
+</details>
 
 ## Development
 
@@ -78,9 +133,9 @@ flutter test
 flutter build windows
 ```
 
-Do not edit `*.g.dart` files manually. Regenerate them after changing Riverpod annotations.
+Generated `*.g.dart` files should never be edited manually. Regenerate them after changing Riverpod annotations.
 
-## GitHub release bundle
+### Create a release bundle
 
 Update `version` in `pubspec.yaml`, then create a portable Windows x64 ZIP:
 
@@ -88,23 +143,12 @@ Update `version` in `pubspec.yaml`, then create a portable Windows x64 ZIP:
 .\tool\package_windows.ps1
 ```
 
-The script builds the release, includes the executable, Flutter and plugin DLLs,
-the `data` directory, and the required Visual C++ runtime DLLs. The resulting
-archive and its SHA-256 checksum are written to `dist\`.
-
-Upload the ZIP to a GitHub Release in the web interface, or use GitHub CLI:
-
-```powershell
-gh release create v1.0.0 .\dist\lapse-windows-x64-v1.0.0.zip .\dist\lapse-windows-x64-v1.0.0.zip.sha256 --title "Lapse v1.0.0" --generate-notes
-```
-
-Users can extract the ZIP and run `lapse.exe`; the files inside the archive must
-remain together.
+The archive and its SHA-256 checksum are written to `dist\`. Users can extract the ZIP and run `lapse.exe`; all bundled files must remain together.
 
 ## Known limitations
 
-- The Windowing API can break between Flutter `main` revisions.
-- Native styling locates the overlay and Dashboard by their centrally defined titles; explicit native handles can replace this when Flutter exposes them.
+- The experimental Windowing API can change between Flutter `main` revisions.
+- Native styling currently identifies the overlay and Dashboard by their centrally defined window titles.
 - Boot identity uses a rounded Windows boot-time heuristic derived from `GetTickCount64`; a large system-clock correction can conservatively start a fresh session.
-- Tracking checkpoints every 30 seconds and on meaningful changes. An abrupt process kill can lose at most the current uncheckpointed interval; normal close-to-tray and Quit persist first.
-- Lapse is Windows-only and intentionally has no cloud sync, URL, document-title, or keystroke tracking.
+- An abrupt process termination can lose the current uncheckpointed interval. Normal close-to-tray and **Quit** actions persist first.
+- Lapse is Windows-only.
